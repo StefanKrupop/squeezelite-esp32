@@ -47,6 +47,7 @@ pwm_system_t pwm_system = {
 static EXT_RAM_ATTR struct {
     uint64_t wake_gpio, wake_level;
     uint64_t rtc_gpio, rtc_level;
+    int poweroff_gpio, poweroff_level;
     uint32_t delay, spurious;
     float battery_level;
     int battery_count;
@@ -242,6 +243,16 @@ void services_sleep_init(void) {
         button_create(NULL, gpio, level ? BUTTON_HIGH : BUTTON_LOW, true, 0, sleep_gpio_handler, 0, -1);
     }
 
+    // get the GPIO that enters sleep mode
+    sleep_context.poweroff_gpio = -1;
+    if ((p = strcasestr(config, "poweroff"))) {
+	char sleep[8] = "";
+	sscanf(p, "%*[^=]=%7[^,]", sleep);
+	sleep_context.poweroff_gpio = atoi(sleep);
+        if ((p = strchr(sleep, ':')) != NULL) sleep_context.poweroff_level = atoi(p + 1);
+        ESP_LOGI(TAG, "Enter sleep gpio %d (active %d)", sleep_context.poweroff_gpio, sleep_context.poweroff_level);
+    }
+
     // do we want delay sleep
     PARSE_PARAM(config, "delay", '=', sleep_context.delay);
     sleep_context.delay *= 60*1000;
@@ -279,6 +290,13 @@ void services_sleep_init(void) {
 void services_sleep_activate(sleep_cause_e cause) {
     // call all sleep hooks that might want to do something
     for (void (**suspend)(void) = sleep_context.suspend; *suspend; suspend++) (*suspend)();
+
+    if (sleep_context.poweroff_gpio != -1) {
+	gpio_pad_select_gpio(sleep_context.poweroff_gpio);
+	gpio_set_direction(sleep_context.poweroff_gpio, GPIO_MODE_OUTPUT);
+	gpio_set_level(sleep_context.poweroff_gpio, sleep_context.poweroff_level);
+	vTaskDelay(pdMS_TO_TICKS(500));
+    }
 
     // isolate all possible GPIOs, except the wake-up and RTC-maintaines ones
     esp_sleep_config_gpio_isolate();
